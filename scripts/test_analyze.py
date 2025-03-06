@@ -2,11 +2,11 @@
 Test script for analyzing web content with OpenAI.
 
 Usage:
-    python -m scripts.test_analyze [url] [question] [--no-cache]
+    python -m scripts.test_analyze [url] [question] [--no-cache] [--no-vector]
 
 Examples:
     python -m scripts.test_analyze https://en.wikipedia.org/wiki/Web_scraping "What are the ethical concerns with web scraping?"
-    python -m scripts.test_analyze https://news.ycombinator.com "What are the trending topics on this page?"
+    python -m scripts.test_analyze https://news.ycombinator.com "What are the trending topics on this page?" --no-vector
 """
 
 import asyncio
@@ -27,11 +27,12 @@ from app.agents.openai_agent import OpenAIAgent
 # Load environment variables
 load_dotenv()
 
-async def test_analyze(url, question, use_cache=True):
+async def test_analyze(url, question, use_cache=True, use_vectorization=True):
     """Test the AI analysis with a given URL and question."""
     print(f"Analyzing URL: {url}")
     print(f"Question: {question}")
     print(f"Using cache: {use_cache}")
+    print(f"Using vectorization: {use_vectorization}")
     
     try:
         # First, scrape the URL
@@ -59,7 +60,8 @@ async def test_analyze(url, question, use_cache=True):
             
         analysis = await openai_agent.analyze_content(
             content=content,
-            question=question
+            question=question,
+            use_vectorization=use_vectorization
         )
         
         # Print results
@@ -67,6 +69,15 @@ async def test_analyze(url, question, use_cache=True):
             print("\n--- Analysis Results ---")
             print(f"Question: {question}")
             print(f"\nAnswer:\n{analysis.get('answer', 'No answer provided')}")
+            
+            # Print vectorization stats if available
+            if "vectorization" in analysis and use_vectorization:
+                v_stats = analysis["vectorization"]
+                print("\nVectorization Stats:")
+                print(f"Original length: {v_stats['original_length']} chars")
+                print(f"Optimized length: {v_stats['optimized_length']} chars")
+                print(f"Compression ratio: {v_stats['compression_ratio'] * 100:.1f}%")
+                print(f"Tokens saved: ~{(v_stats['original_length'] - v_stats['optimized_length']) // 4}")
                 
             # Save results to file
             output_file = "analysis_result.json"
@@ -89,6 +100,7 @@ def main():
     parser.add_argument("url", help="URL to analyze")
     parser.add_argument("question", help="Question to answer about the content")
     parser.add_argument("--no-cache", action="store_true", help="Disable cache")
+    parser.add_argument("--no-vector", action="store_true", help="Disable vectorization")
     
     args = parser.parse_args()
     
@@ -96,7 +108,8 @@ def main():
     asyncio.run(test_analyze(
         url=args.url,
         question=args.question,
-        use_cache=not args.no_cache
+        use_cache=not args.no_cache,
+        use_vectorization=not args.no_vector
     ))
 
 if __name__ == "__main__":
