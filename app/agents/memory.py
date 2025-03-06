@@ -24,6 +24,17 @@ FIREBASE_COLLECTION_NAME = os.environ.get("FIREBASE_COLLECTION_NAME", "vector_em
 FIREBASE_NAMESPACE = os.environ.get("FIREBASE_NAMESPACE", "web_scraper")
 MEMORY_CACHE_DIR = os.environ.get("MEMORY_CACHE_DIR", "./data/memory_cache")
 
+# Default memory parameters
+DEFAULT_MEMORY_PARAMS = {
+    "max_items_per_query": 5,       # Maximum number of memory items to retrieve per query
+    "relevance_threshold": 0.6,     # Minimum similarity score (0-1) for memory to be considered relevant
+    "max_context_items": 3,         # Maximum number of memory items to include in context
+    "retention_period": 2592000,    # How long to retain memories in seconds (30 days default)
+    "priority_categories": [],      # Categories that should be prioritized in retrieval
+    "auto_categorize": True,        # Whether to attempt automatic categorization of new memories
+    "context_strategy": "recency_weighted"  # Strategy for context selection (options: relevance_only, recency_weighted, priority_first)
+}
+
 class AgentMemory:
     """
     Context memory for agents using vector database storage.
@@ -34,6 +45,7 @@ class AgentMemory:
     - Maintain persistent memory across sessions
     - Tag memory objects with categories
     - Filter memory by metadata
+    - Configurable memory parameters
     """
     
     def __init__(
@@ -43,7 +55,8 @@ class AgentMemory:
         use_firebase: bool = USE_FIREBASE_VECTORDB,
         firebase_collection: str = FIREBASE_COLLECTION_NAME,
         firebase_namespace: str = FIREBASE_NAMESPACE,
-        memory_cache_dir: str = MEMORY_CACHE_DIR
+        memory_cache_dir: str = MEMORY_CACHE_DIR,
+        memory_params: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize agent memory.
@@ -55,6 +68,7 @@ class AgentMemory:
             firebase_collection: Firestore collection name
             firebase_namespace: Firebase namespace
             memory_cache_dir: Directory for local cache
+            memory_params: Optional custom memory parameters
         """
         self.agent_id = agent_id
         self.embeddings = embeddings_model or OpenAIEmbeddings()
@@ -63,8 +77,16 @@ class AgentMemory:
         self.firebase_namespace = firebase_namespace
         self.memory_cache_dir = memory_cache_dir
         
+        # Set memory parameters (use defaults for any missing)
+        self.memory_params = DEFAULT_MEMORY_PARAMS.copy()
+        if memory_params:
+            self.memory_params.update(memory_params)
+        
         # Initialize memory store
         self._initialize_memory_store()
+        
+        # Load or create agent parameters
+        self._load_agent_params()
         
         logger.info(f"Initialized memory for agent {agent_id}")
         logger.info(f"Using Firebase: {use_firebase}")
@@ -118,8 +140,105 @@ class AgentMemory:
                 # Save to disk
                 self.memory_store.save_local(self.memory_cache_dir, index_name=self.memory_index)
                 logger.info(f"Initialized local memory for agent {self.agent_id}")
+
+    async def _load_agent_params(self):
+        """Load agent parameters from memory or create default ones."""
+        try:
+            # Try to retrieve the agent parameters
+            filter_by = {
+                "type": "agent_params"
+            }
+            
+            # Convert to search filter format
+            search_filter = {f"metadata.{k}": v for k, v in filter_by.items()}
+            search_filter["metadata.agent_id"] = self.agent_id
+            
+            # Search vector store
+            docs = self.memory_store.similarity_search(
+                query="agent parameters",
+                k=1,
+                filter=search_filter
+            )
+            
+            if docs:
+                # Found parameters
+                doc = docs[0]
+                params_json = doc.metadata.get("params", "{}")
+                self.memory_params = json.loads(params_json)
+                logger.info(f"Loaded memory parameters for agent {self.agent_id}")
+            else:
+                # No parameters found, save default ones
+                await self._save_agent_params()
+        except Exception as e:
+            logger.error(f"Error loading agent parameters: {str(e)}")
+            # Ensure we have default parameters
+            self.memory_params = DEFAULT_MEMORY_PARAMS.copy()
+            # Try to save them
+            await self._save_agent_params()
     
-    def add_document(
+    async def _save_agent_params(self):
+        """Save agent parameters to memory."""
+        try:
+            # Convert parameters to JSON
+            params_json = json.dumps(self.memory_params)
+            
+            # Create metadata
+            metadata = {
+                "agent_id": self.agent_id,
+                "type": "agent_params",
+                "params": params_json,
+                "timestamp": time.time()
+            }
+            
+            # Create document with description of parameters
+            description = f"Memory parameters for agent {self.agent_id}"
+            doc = Document(page_content=description, metadata=metadata)
+            
+            # Add to memory store (or update existing)
+            self.memory_store.add_documents([doc])
+            
+            # If using local FAISS, save to disk
+            if not self.use_firebase:
+                self.memory_store.save_local(self.memory_cache_dir, index_name=self.memory_index)
+            
+            logger.info(f"Saved memory parameters for agent {self.agent_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving agent parameters: {str(e)}")
+            return False
+    
+    async def update_memory_params(self, new_params: Dict[str, Any]) -> bool:
+        """
+        Update memory parameters for this agent.
+        
+        Args:
+            new_params: Dictionary with parameters to update
+            
+        Returns:
+            True if successful
+        """
+        try:
+            # Update parameters
+            self.memory_params.update(new_params)
+            
+            # Save to memory
+            success = await self._save_agent_params()
+            
+            return success
+        except Exception as e:
+            logger.error(f"Error updating memory parameters: {str(e)}")
+            return False
+    
+    async def get_memory_params(self) -> Dict[str, Any]:
+        """
+        Get current memory parameters.
+        
+        Returns:
+            Dictionary with memory parameters
+        """
+        return self.memory_params.copy()
+    
+    async def add_document(
         self,
         document: Union[str, Document],
         metadata: Optional[Dict[str, Any]] = None,
@@ -160,6 +279,12 @@ class AgentMemory:
                 "type": "document"
             })
             
+            # Auto-categorize if enabled and no category provided
+            if self.memory_params.get("auto_categorize", True) and not category:
+                # This would be a good place to implement auto-categorization
+                # For now, we'll just use a default category
+                metadata["category"] = "uncategorized"
+            
             # Create document
             doc = Document(page_content=document, metadata=metadata)
         else:
@@ -190,7 +315,7 @@ class AgentMemory:
         logger.info(f"Added document to memory: {doc_id}")
         return doc_id
     
-    def add_data_object(
+    async def add_data_object(
         self,
         content: Dict[str, Any],
         description: str,
@@ -228,6 +353,9 @@ class AgentMemory:
         # Add category if provided
         if category:
             metadata["category"] = category
+        elif self.memory_params.get("auto_categorize", True):
+            # Auto-categorize
+            metadata["category"] = "data"
         
         # Create document
         doc = Document(page_content=description, metadata=metadata)
@@ -242,10 +370,10 @@ class AgentMemory:
         logger.info(f"Added data object to memory: {obj_id}")
         return obj_id
     
-    def retrieve_relevant(
+    async def retrieve_relevant(
         self,
         query: str,
-        k: int = 5,
+        k: Optional[int] = None,
         category: Optional[str] = None,
         filter_by: Optional[Dict[str, Any]] = None
     ) -> List[Union[Dict[str, Any], str]]:
@@ -254,13 +382,17 @@ class AgentMemory:
         
         Args:
             query: Query text
-            k: Number of results to retrieve
+            k: Number of results to retrieve (uses memory_params if not specified)
             category: Optional category to filter by
             filter_by: Optional metadata filter dictionary
             
         Returns:
             List of memories (documents or data objects)
         """
+        # Use memory params if k not specified
+        if k is None:
+            k = self.memory_params.get("max_items_per_query", 5)
+        
         # Create filter
         search_filter = {}
         
@@ -276,10 +408,13 @@ class AgentMemory:
             for key, value in filter_by.items():
                 search_filter[f"metadata.{key}"] = value
         
+        # Expand k if using relevance threshold
+        search_k = min(k * 2, 20)  # Get more than needed to filter by relevance
+        
         # Search vector store
         docs = self.memory_store.similarity_search(
             query=query,
-            k=k,
+            k=search_k,
             filter=search_filter
         )
         
@@ -309,6 +444,9 @@ class AgentMemory:
                         "message": "Failed to parse data object",
                         "obj_id": metadata.get("obj_id")
                     })
+            elif doc_type == "agent_params":
+                # Skip agent parameters in results
+                continue
             else:
                 # Return document
                 results.append({
@@ -320,10 +458,91 @@ class AgentMemory:
                     "metadata": {k: v for k, v in metadata.items() if k not in ["doc_id", "agent_id", "timestamp", "type", "category"]}
                 })
         
+        # Apply post-processing based on strategy
+        results = await self._apply_memory_strategy(results, query)
+        
+        # Limit to k results
+        results = results[:k]
+        
         logger.info(f"Retrieved {len(results)} memories for query: {query[:30]}...")
         return results
     
-    def get_by_id(
+    async def _apply_memory_strategy(
+        self, 
+        results: List[Dict[str, Any]], 
+        query: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply memory retrieval strategy based on agent parameters.
+        
+        Args:
+            results: Initial memory retrieval results
+            query: Original query
+            
+        Returns:
+            Processed results based on strategy
+        """
+        strategy = self.memory_params.get("context_strategy", "recency_weighted")
+        
+        if strategy == "relevance_only":
+            # Just return as is (already sorted by relevance)
+            return results
+            
+        elif strategy == "recency_weighted":
+            # Re-rank by combining recency and relevance
+            # Since results are already sorted by relevance, we'll weight them
+            now = time.time()
+            for i, item in enumerate(results):
+                # Original relevance score (higher index = lower relevance)
+                relevance_score = 1.0 - (i / max(1, len(results)))
+                
+                # Recency score (1.0 = now, 0.0 = oldest possible)
+                timestamp = item.get("timestamp", 0)
+                age_in_days = (now - timestamp) / 86400  # Convert to days
+                max_age = self.memory_params.get("retention_period", 2592000) / 86400
+                recency_score = 1.0 - min(1.0, age_in_days / max_age)
+                
+                # Combined score (higher = better)
+                item["_combined_score"] = (0.7 * relevance_score) + (0.3 * recency_score)
+            
+            # Sort by combined score
+            results.sort(key=lambda x: x.get("_combined_score", 0), reverse=True)
+            
+            # Remove score field
+            for item in results:
+                if "_combined_score" in item:
+                    del item["_combined_score"]
+                    
+            return results
+            
+        elif strategy == "priority_first":
+            # Sort by priority categories first, then relevance
+            priority_categories = self.memory_params.get("priority_categories", [])
+            
+            if priority_categories:
+                # Split into priority and non-priority
+                priority_items = []
+                other_items = []
+                
+                for item in results:
+                    category = item.get("category")
+                    if category in priority_categories:
+                        priority_items.append(item)
+                    else:
+                        other_items.append(item)
+                
+                # Combine in order (priority first, then others)
+                return priority_items + other_items
+            else:
+                # No priority categories, return as is
+                return results
+        
+        else:
+            # Unknown strategy, return as is
+            logger.warning(f"Unknown memory strategy: {strategy}, using default")
+            return results
+    
+    async def get_by_id(
         self,
         item_id: str,
         item_type: str = "document"
@@ -400,7 +619,7 @@ class AgentMemory:
                 "metadata": {k: v for k, v in metadata.items() if k not in ["doc_id", "agent_id", "timestamp", "type", "category"]}
             }
     
-    def list_by_category(self, category: str) -> List[Dict[str, Any]]:
+    async def list_by_category(self, category: str) -> List[Dict[str, Any]]:
         """
         List all memories in a category.
         
@@ -429,7 +648,10 @@ class AgentMemory:
             metadata = doc.metadata
             doc_type = metadata.get("type", "document")
             
-            if doc_type == "data_object":
+            if doc_type == "agent_params":
+                # Skip agent parameters
+                continue
+            elif doc_type == "data_object":
                 results.append({
                     "type": "data_object",
                     "obj_id": metadata.get("obj_id"),
@@ -449,7 +671,7 @@ class AgentMemory:
         logger.info(f"Listed {len(results)} memories in category: {category}")
         return results
     
-    def delete_item(self, item_id: str, item_type: str = "document") -> bool:
+    async def delete_item(self, item_id: str, item_type: str = "document") -> bool:
         """
         Delete a memory item.
         
@@ -530,14 +752,22 @@ class AgentMemory:
             logger.error(f"Error deleting memory item: {str(e)}")
             return False
     
-    def wipe_memory(self) -> bool:
+    async def wipe_memory(self, keep_params: bool = True) -> bool:
         """
         Clear all memories for this agent.
         
+        Args:
+            keep_params: Whether to preserve agent parameters
+            
         Returns:
             True if successful, False otherwise
         """
         try:
+            # Save parameters if keeping them
+            params_backup = None
+            if keep_params:
+                params_backup = self.memory_params.copy()
+            
             if self.use_firebase:
                 # For Firebase, use the delete method with no IDs to delete all
                 firebase_store = self.memory_store
@@ -550,6 +780,11 @@ class AgentMemory:
                 )
                 # Save to disk
                 self.memory_store.save_local(self.memory_cache_dir, index_name=self.memory_index)
+            
+            # Restore parameters if requested
+            if keep_params and params_backup:
+                self.memory_params = params_backup
+                await self._save_agent_params()
             
             logger.info(f"Wiped all memories for agent {self.agent_id}")
             return True
