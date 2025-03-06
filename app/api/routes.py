@@ -28,12 +28,14 @@ class AnalyzeRequest(BaseModel):
     url: HttpUrl
     question: str = Field(..., description="Question to answer about the content")
     use_cache: bool = True
+    use_vectorization: bool = True
 
 class SummarizeRequest(BaseModel):
     """Request model for summarizing content."""
     url: HttpUrl
     max_length: int = Field(500, ge=100, le=2000, description="Maximum summary length in words")
     use_cache: bool = True
+    use_vectorization: bool = True
 
 class MultiPageRequest(BaseModel):
     """Request model for multi-page scraping."""
@@ -96,9 +98,11 @@ async def analyze_content(
     - **url**: URL to analyze
     - **question**: Question to answer about the content
     - **use_cache**: Whether to use cached results if available
+    - **use_vectorization**: Whether to use vector search for context optimization (more efficient)
     """
     try:
         logger.info(f"Analyzing URL: {request.url} with question: {request.question}")
+        logger.info(f"Using vectorization: {request.use_vectorization}")
         
         # Scrape the URL first
         content = await WebScraper.scrape_url(
@@ -114,7 +118,8 @@ async def analyze_content(
         # Analyze the content
         analysis = await openai_agent.analyze_content(
             content=content,
-            question=request.question
+            question=request.question,
+            use_vectorization=request.use_vectorization
         )
         
         # Check if analysis was successful
@@ -139,9 +144,11 @@ async def summarize_content(
     - **url**: URL to summarize
     - **max_length**: Maximum summary length in words
     - **use_cache**: Whether to use cached results if available
+    - **use_vectorization**: Whether to use vector search for context optimization (more efficient)
     """
     try:
         logger.info(f"Summarizing URL: {request.url}")
+        logger.info(f"Using vectorization: {request.use_vectorization}")
         
         # Scrape the URL first
         content = await WebScraper.scrape_url(
@@ -157,7 +164,8 @@ async def summarize_content(
         # Summarize the content
         summary = await openai_agent.summarize_content(
             content=content,
-            max_length=request.max_length
+            max_length=request.max_length,
+            use_vectorization=request.use_vectorization
         )
         
         # Check if summarization was successful
