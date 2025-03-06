@@ -1,35 +1,71 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Virtual environments
+# Virtual environment
 venv/
 env/
 ENV/
 
-# Environment variables
-.env
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Logs
-logs/
-*.log
-
-# IDE specific files
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# OS specific files
-.DS_Store
-Thumbs.db
+# Environment variables
+.env
 
-# Project specific
+# Firebase
+firebase-credentials.json
+*-firebase-adminsdk-*.json
+
+# Data files
 data/
-.playwright-browser/
+*.txt
+*.json
+*.csv
+*.tsv
+*.pkl
+*.npz
+*.npy
+*.db
+*.sqlite
+*.sqlite3
+*.faiss
+*.h5
+*.hdf5
+*.bin
+
+# Logs
+logs/
+*.log
+
+# Playwright browser binaries
+.playwright-browsers/
+playwright-log.txt
+
+# OS-specific
+.DS_Store
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
