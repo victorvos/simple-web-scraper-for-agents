@@ -1,7 +1,7 @@
 """Document processing and vectorization for efficient LLM usage."""
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import json
 import hashlib
 
@@ -10,6 +10,10 @@ from langchain.schema import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain_core.embeddings import Embeddings
+from langchain_core.vectorstores import VectorStore
+
+# Import Firebase VectorDB
+from app.storage.firebase_vector_db import FirebaseVectorStore
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -18,6 +22,9 @@ logger = logging.getLogger(__name__)
 VECTOR_CACHE_DIR = os.environ.get("VECTOR_CACHE_DIR", "./data/vector_cache")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "200"))
+USE_FIREBASE_VECTORDB = os.environ.get("USE_FIREBASE_VECTORDB", "false").lower() == "true"
+FIREBASE_COLLECTION_NAME = os.environ.get("FIREBASE_COLLECTION_NAME", "vector_embeddings")
+FIREBASE_NAMESPACE = os.environ.get("FIREBASE_NAMESPACE", "web_scraper")
 
 class DocumentProcessor:
     """
@@ -35,7 +42,10 @@ class DocumentProcessor:
         embeddings_model: Optional[Embeddings] = None,
         chunk_size: int = CHUNK_SIZE,
         chunk_overlap: int = CHUNK_OVERLAP,
-        cache_dir: str = VECTOR_CACHE_DIR
+        cache_dir: str = VECTOR_CACHE_DIR,
+        use_firebase: bool = USE_FIREBASE_VECTORDB,
+        firebase_collection: str = FIREBASE_COLLECTION_NAME,
+        firebase_namespace: str = FIREBASE_NAMESPACE
     ):
         """
         Initialize the document processor.
@@ -45,6 +55,9 @@ class DocumentProcessor:
             chunk_size: Size of document chunks
             chunk_overlap: Overlap between chunks
             cache_dir: Directory to cache vector stores
+            use_firebase: Whether to use Firebase for vector storage
+            firebase_collection: Firestore collection for vector storage
+            firebase_namespace: Firebase namespace for grouping vectors
         """
         # Initialize embeddings model
         self.embeddings = embeddings_model or OpenAIEmbeddings()
@@ -60,17 +73,26 @@ class DocumentProcessor:
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
         
+        # Set Firebase settings
+        self.use_firebase = use_firebase
+        self.firebase_collection = firebase_collection
+        self.firebase_namespace = firebase_namespace
+        
         # Keep a cache of loaded vector stores
         self.vector_stores = {}
         
+        # Log initialization info
         logger.info(f"Document processor initialized with chunk_size={chunk_size}, chunk_overlap={chunk_overlap}")
         logger.info(f"Vector cache directory: {cache_dir}")
+        logger.info(f"Using Firebase vector database: {use_firebase}")
+        if use_firebase:
+            logger.info(f"Firebase collection: {firebase_collection}, namespace: {firebase_namespace}")
     
     async def process_web_content(
         self,
         content: Dict[str, Any],
         store_id: Optional[str] = None
-    ) -> FAISS:
+    ) -> Union[FAISS, FirebaseVectorStore]:
         """
         Process web content into vectorized chunks.
         
@@ -79,7 +101,7 @@ class DocumentProcessor:
             store_id: Optional ID for the vector store (for caching)
             
         Returns:
-            FAISS vector store with the processed content
+            Vector store with the processed content
         """
         # Extract text and metadata
         text = content.get("text", "")
@@ -98,23 +120,45 @@ class DocumentProcessor:
             logger.info(f"Using in-memory vector store: {store_id}")
             return self.vector_stores[store_id]
         
-        # Check disk cache
-        store_path = os.path.join(self.cache_dir, f"{store_id}.faiss")
-        if os.path.exists(store_path) and os.path.exists(f"{store_path}.json"):
+        # Check for existing vector store
+        if self.use_firebase:
+            # Use Firebase vector database
             try:
-                # Load from disk
-                vector_store = FAISS.load_local(
-                    folder_path=self.cache_dir,
-                    index_name=store_id,
-                    embeddings=self.embeddings
+                # Initialize with existing index if it exists
+                vector_store = FirebaseVectorStore(
+                    embedding_model=self.embeddings,
+                    collection_name=self.firebase_collection,
+                    namespace=self.firebase_namespace,
+                    index_name=store_id
                 )
-                logger.info(f"Loaded vector store from cache: {store_id}")
                 
-                # Cache in memory
-                self.vector_stores[store_id] = vector_store
-                return vector_store
+                # Check if any vectors exist with this index_name
+                # If not, we'll need to create new vectors
+                test_docs = vector_store.similarity_search("test", k=1)
+                if test_docs:
+                    logger.info(f"Loaded Firebase vector store for index: {store_id}")
+                    self.vector_stores[store_id] = vector_store
+                    return vector_store
             except Exception as e:
-                logger.warning(f"Failed to load vector store from cache: {e}")
+                logger.warning(f"Could not load existing Firebase vector store: {e}. Creating new one.")
+        else:
+            # Use local FAISS
+            store_path = os.path.join(self.cache_dir, f"{store_id}.faiss")
+            if os.path.exists(store_path) and os.path.exists(f"{store_path}.json"):
+                try:
+                    # Load from disk
+                    vector_store = FAISS.load_local(
+                        folder_path=self.cache_dir,
+                        index_name=store_id,
+                        embeddings=self.embeddings
+                    )
+                    logger.info(f"Loaded vector store from cache: {store_id}")
+                    
+                    # Cache in memory
+                    self.vector_stores[store_id] = vector_store
+                    return vector_store
+                except Exception as e:
+                    logger.warning(f"Failed to load vector store from cache: {e}")
         
         # Create documents from the content
         metadata = {
@@ -143,11 +187,22 @@ class DocumentProcessor:
         logger.info(f"Creating vector embeddings for {len(documents)} chunks...")
         
         # Create vector store
-        vector_store = FAISS.from_documents(documents, self.embeddings)
-        
-        # Save to disk
-        vector_store.save_local(self.cache_dir, index_name=store_id)
-        logger.info(f"Saved vector store to cache: {store_id}")
+        if self.use_firebase:
+            vector_store = FirebaseVectorStore.from_documents(
+                documents=documents,
+                embedding=self.embeddings,
+                collection_name=self.firebase_collection,
+                namespace=self.firebase_namespace,
+                index_name=store_id
+            )
+            logger.info(f"Created and stored vectors in Firebase: {store_id}")
+        else:
+            # Create local FAISS vector store
+            vector_store = FAISS.from_documents(documents, self.embeddings)
+            
+            # Save to disk
+            vector_store.save_local(self.cache_dir, index_name=store_id)
+            logger.info(f"Saved vector store to cache: {store_id}")
         
         # Cache in memory
         self.vector_stores[store_id] = vector_store
@@ -157,7 +212,7 @@ class DocumentProcessor:
     async def retrieve_relevant_context(
         self,
         query: str,
-        vector_store: FAISS,
+        vector_store: Union[FAISS, FirebaseVectorStore],
         num_chunks: int = 5
     ) -> List[str]:
         """
@@ -165,7 +220,7 @@ class DocumentProcessor:
         
         Args:
             query: Question or query to match context for
-            vector_store: FAISS vector store to search in
+            vector_store: Vector store to search in
             num_chunks: Number of context chunks to retrieve
             
         Returns:
@@ -224,7 +279,8 @@ class DocumentProcessor:
                 "optimized_text": optimized_context,
                 "num_chunks": len(context_chunks),
                 "original_length": len(content.get("text", "")),
-                "optimized_length": len(optimized_context)
+                "optimized_length": len(optimized_context),
+                "storage_type": "firebase" if self.use_firebase else "local_faiss"
             }
             
             # Calculate token estimate (rough approximation: 4 chars ≈ 1 token)
@@ -249,5 +305,6 @@ class DocumentProcessor:
                 "num_chunks": 1,
                 "original_length": len(content.get("text", "")),
                 "optimized_length": len(content.get("text", "")),
+                "storage_type": "fallback",
                 "error": str(e)
             }
