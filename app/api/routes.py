@@ -29,6 +29,7 @@ class AnalyzeRequest(BaseModel):
     question: str = Field(..., description="Question to answer about the content")
     use_cache: bool = True
     use_vectorization: bool = True
+    use_memory: bool = True
 
 class SummarizeRequest(BaseModel):
     """Request model for summarizing content."""
@@ -36,6 +37,7 @@ class SummarizeRequest(BaseModel):
     max_length: int = Field(500, ge=100, le=2000, description="Maximum summary length in words")
     use_cache: bool = True
     use_vectorization: bool = True
+    use_memory: bool = True
 
 class MultiPageRequest(BaseModel):
     """Request model for multi-page scraping."""
@@ -44,11 +46,39 @@ class MultiPageRequest(BaseModel):
     same_domain_only: bool = True
     use_cache: bool = True
 
+class MemoryAddRequest(BaseModel):
+    """Request model for adding to agent memory."""
+    agent_id: Optional[str] = None
+    content: Union[str, Dict[str, Any]]
+    content_type: str = Field("document", description="Type of content: 'document' or 'data_object'")
+    description: Optional[str] = None
+    category: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class MemoryRetrieveRequest(BaseModel):
+    """Request model for retrieving from agent memory."""
+    agent_id: Optional[str] = None
+    query: Optional[str] = None
+    memory_id: Optional[str] = None
+    category: Optional[str] = None
+    max_results: int = Field(5, ge=1, le=20, description="Maximum number of results to return")
+
+class MemoryDeleteRequest(BaseModel):
+    """Request model for deleting from agent memory."""
+    agent_id: str
+    memory_id: str
+    memory_type: str = Field("document", description="Type of memory: 'document' or 'data_object'")
+
+class MemoryWipeRequest(BaseModel):
+    """Request model for wiping agent memory."""
+    agent_id: str
+    confirm: bool = Field(False, description="Confirmation that memory should be wiped")
+
 # Dependency for OpenAI agent
-async def get_openai_agent():
+async def get_openai_agent(agent_id: Optional[str] = None):
     """Get OpenAI agent instance."""
     try:
-        return OpenAIAgent()
+        return OpenAIAgent(agent_id=agent_id)
     except ValueError as e:
         logger.error(f"Failed to initialize OpenAI agent: {str(e)}")
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
@@ -99,6 +129,7 @@ async def analyze_content(
     - **question**: Question to answer about the content
     - **use_cache**: Whether to use cached results if available
     - **use_vectorization**: Whether to use vector search for context optimization (more efficient)
+    - **use_memory**: Whether to use agent memory for additional context
     """
     try:
         logger.info(f"Analyzing URL: {request.url} with question: {request.question}")
@@ -119,7 +150,8 @@ async def analyze_content(
         analysis = await openai_agent.analyze_content(
             content=content,
             question=request.question,
-            use_vectorization=request.use_vectorization
+            use_vectorization=request.use_vectorization,
+            use_memory=request.use_memory
         )
         
         # Check if analysis was successful
@@ -145,6 +177,7 @@ async def summarize_content(
     - **max_length**: Maximum summary length in words
     - **use_cache**: Whether to use cached results if available
     - **use_vectorization**: Whether to use vector search for context optimization (more efficient)
+    - **use_memory**: Whether to use agent memory for additional context
     """
     try:
         logger.info(f"Summarizing URL: {request.url}")
@@ -165,7 +198,8 @@ async def summarize_content(
         summary = await openai_agent.summarize_content(
             content=content,
             max_length=request.max_length,
-            use_vectorization=request.use_vectorization
+            use_vectorization=request.use_vectorization,
+            use_memory=request.use_memory
         )
         
         # Check if summarization was successful
@@ -207,6 +241,155 @@ async def scrape_multiple_pages(request: MultiPageRequest):
         
     except Exception as e:
         logger.error(f"Error in scrape_multiple_pages: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/add", summary="Add content to agent memory")
+async def add_to_memory(
+    request: MemoryAddRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Add content to agent memory.
+    
+    - **agent_id**: Optional agent ID (generated if not provided)
+    - **content**: Content to add (text string or data object)
+    - **content_type**: Type of content ('document' or 'data_object')
+    - **description**: Description for data objects
+    - **category**: Optional category label
+    - **metadata**: Optional metadata dictionary
+    """
+    try:
+        logger.info(f"Adding to memory for agent {openai_agent.agent_id}")
+        
+        result = await openai_agent.add_to_memory(
+            content=request.content,
+            content_type=request.content_type,
+            description=request.description,
+            category=request.category,
+            metadata=request.metadata
+        )
+        
+        if not result.get("success", False):
+            error = result.get("error", "Unknown error")
+            raise HTTPException(status_code=400, detail=f"Failed to add to memory: {error}")
+        
+        # Return success with agent ID for subsequent calls
+        return {
+            "success": True,
+            "agent_id": openai_agent.agent_id,
+            "memory_id": result.get("memory_id"),
+            "memory_type": result.get("type")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error adding to memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/retrieve", summary="Retrieve content from agent memory")
+async def retrieve_from_memory(
+    request: MemoryRetrieveRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Retrieve content from agent memory.
+    
+    - **agent_id**: Optional agent ID (uses most recent agent if not provided)
+    - **query**: Optional text query to search memory
+    - **memory_id**: Optional specific memory ID to retrieve
+    - **category**: Optional category to filter by
+    - **max_results**: Maximum number of results to return for queries
+    """
+    try:
+        logger.info(f"Retrieving from memory for agent {openai_agent.agent_id}")
+        
+        result = await openai_agent.get_memory(
+            query=request.query,
+            memory_id=request.memory_id,
+            category=request.category,
+            k=request.max_results
+        )
+        
+        if not result.get("success", False):
+            error = result.get("error", "Unknown error")
+            raise HTTPException(status_code=400, detail=f"Failed to retrieve from memory: {error}")
+        
+        # Add agent ID to result
+        result["agent_id"] = openai_agent.agent_id
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error retrieving from memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/delete", summary="Delete content from agent memory")
+async def delete_from_memory(
+    request: MemoryDeleteRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Delete content from agent memory.
+    
+    - **agent_id**: Agent ID
+    - **memory_id**: Memory item ID to delete
+    - **memory_type**: Type of memory ('document' or 'data_object')
+    """
+    try:
+        logger.info(f"Deleting from memory for agent {openai_agent.agent_id}")
+        
+        result = await openai_agent.delete_memory(
+            memory_id=request.memory_id,
+            memory_type=request.memory_type
+        )
+        
+        if not result.get("success", False):
+            error = result.get("error", "Unknown error")
+            raise HTTPException(status_code=400, detail=f"Failed to delete from memory: {error}")
+        
+        # Return success
+        return {
+            "success": True,
+            "agent_id": openai_agent.agent_id,
+            "message": result.get("message")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deleting from memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/wipe", summary="Wipe all agent memory")
+async def wipe_memory(
+    request: MemoryWipeRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Wipe all agent memory.
+    
+    - **agent_id**: Agent ID
+    - **confirm**: Confirmation that memory should be wiped (must be true)
+    """
+    try:
+        if not request.confirm:
+            raise HTTPException(status_code=400, detail="Confirmation required to wipe memory")
+        
+        logger.info(f"Wiping memory for agent {openai_agent.agent_id}")
+        
+        result = await openai_agent.wipe_memory()
+        
+        if not result.get("success", False):
+            error = result.get("error", "Unknown error")
+            raise HTTPException(status_code=400, detail=f"Failed to wipe memory: {error}")
+        
+        # Return success
+        return {
+            "success": True,
+            "agent_id": openai_agent.agent_id,
+            "message": result.get("message")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error wiping memory: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cache/clear", summary="Clear expired cache entries")
