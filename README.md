@@ -21,6 +21,12 @@ A lightweight web scraping tool that extracts structured data and passes it to A
   - Reduces token usage by 70-90% compared to raw text
   - Improves response quality for large documents
 
+- **Firebase vector database integration**:
+  - Persistent cloud storage for vector embeddings
+  - Scales across multiple instances and deployments
+  - Shared vector embeddings database for distributed scraping
+  - Automatic backup and redundancy
+
 - **AI integration**:
   - Uses OpenAI to analyze web content
   - Can answer questions about scraped content
@@ -62,7 +68,19 @@ cp .env.example .env
 mkdir -p data/cache data/vector_cache
 ```
 
-5. Run the API server:
+5. Firebase Setup (Optional but Recommended):
+   - Create a Firebase project at [https://console.firebase.google.com/](https://console.firebase.google.com/)
+   - Set up Firestore Database and Storage in your project
+   - Download your Firebase Admin SDK service account key JSON file
+   - Save the JSON file as `firebase-credentials.json` in your project root
+   - Update your `.env` file with Firebase settings:
+     ```
+     USE_FIREBASE_VECTORDB=true
+     FIREBASE_CREDENTIALS_PATH=./firebase-credentials.json
+     FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
+     ```
+
+6. Run the API server:
 ```bash
 uvicorn app.main:app --reload
 ```
@@ -110,15 +128,17 @@ Once the server is running, you can access the interactive API documentation at:
   - `api/`: API routes and definitions
   - `storage/`: Local data storage logic
     - `cache.py`: Caching system for scraped content
+    - `firebase_vector_db.py`: Firebase vector database integration
   - `main.py`: Application entry point
 - `scripts/`: Utility scripts
   - `test_scrape.py`: Test script for the scraper
   - `test_analyze.py`: Test script for AI analysis
 - `data/`: (Created at runtime)
   - `cache/`: Stores scraped HTML and extracted text
-  - `vector_cache/`: Stores vectorized document embeddings
+  - `vector_cache/`: Stores vectorized document embeddings (local mode only)
 - `requirements.txt`: Dependencies
 - `.env.example`: Environment variables template
+- `firebase-credentials.json`: Firebase credentials file (you must create this)
 
 ## How Vectorization Works
 
@@ -137,7 +157,7 @@ Benefits include:
 
 ## Storage and Caching System
 
-The application uses two types of caching to improve performance and reduce API costs:
+The application uses multiple types of storage to improve performance and reduce API costs:
 
 ### Content Cache (`data/cache/`)
 - Stores raw HTML and extracted text from scraped websites
@@ -145,17 +165,29 @@ The application uses two types of caching to improve performance and reduce API 
 - Configurable TTL (time-to-live) for cache entries
 - Prevents unnecessary repeat requests to the same URLs
 
-### Vector Cache (`data/vector_cache/`)
-- Stores FAISS vector indexes with document embeddings
-- Each webpage gets its own vector index for semantic search
-- Significantly speeds up repeat queries to the same website
-- Reduces OpenAI API costs for embedding generation
+### Vector Storage
+The application supports two vector storage backends:
 
-You can configure cache settings in the `.env` file:
+#### Local FAISS Vector Store (`data/vector_cache/`)
+- Default option if Firebase is not configured
+- Stores FAISS vector indexes with document embeddings locally
+- Each webpage gets its own vector index for semantic search
+- Fast for single-instance deployment
+
+#### Firebase Vector Database (Cloud-based)
+- Recommended for production use
+- Stores vector embeddings in Firestore
+- Enables sharing vector data across multiple instances
+- Provides automatic backup and redundancy
+- Scales better for production workloads
+- Makes vectors persistent across application restarts
+
+To switch between storage backends, configure in your `.env` file:
 ```
-CACHE_DIR=./data/cache
-CACHE_EXPIRY=86400  # 24 hours in seconds
-VECTOR_CACHE_DIR=./data/vector_cache
+# Use local FAISS
+USE_FIREBASE_VECTORDB=false
+# Or use Firebase
+USE_FIREBASE_VECTORDB=true
 ```
 
 ## Configuration Options
@@ -176,9 +208,64 @@ All configuration can be done through environment variables in the `.env` file:
 - `CHUNK_SIZE`: Size of document chunks for vectorization (default: 1000)
 - `CHUNK_OVERLAP`: Overlap between chunks (default: 200)
 
+### Storage Settings
+- `CACHE_DIR`: Directory for content cache (default: ./data/cache)
+- `CACHE_EXPIRY`: TTL for cache entries in seconds (default: 86400 - 24h)
+- `VECTOR_CACHE_DIR`: Directory for vector embeddings (default: ./data/vector_cache)
+
+### Firebase Settings
+- `USE_FIREBASE_VECTORDB`: Use Firebase for vector storage (default: false)
+- `FIREBASE_CREDENTIALS_PATH`: Path to Firebase credentials JSON (default: ./firebase-credentials.json)
+- `FIREBASE_STORAGE_BUCKET`: Firebase Storage bucket name (e.g., your-project-id.appspot.com)
+- `FIREBASE_COLLECTION_NAME`: Firestore collection name for vectors (default: vector_embeddings)
+- `FIREBASE_NAMESPACE`: Namespace for grouping vectors (default: web_scraper)
+
 ### Server Settings
 - `HOST`: Server host (default: 0.0.0.0)
 - `PORT`: Server port (default: 8000)
+
+## Firebase Setup Instructions
+
+To set up Firebase for vector database storage:
+
+1. **Create a Firebase project:**
+   - Go to the [Firebase Console](https://console.firebase.google.com/)
+   - Click "Add project" and follow the setup wizard
+
+2. **Set up Firestore:**
+   - In your project, go to Firestore Database
+   - Click "Create database"
+   - Choose "Start in production mode" or "Start in test mode" (for development)
+   - Select a location for your database
+
+3. **Set up Storage:**
+   - In your project, go to Storage
+   - Click "Get started"
+   - Choose "Start in production mode" or "Start in test mode"
+   - Select a location for your storage bucket
+
+4. **Generate a service account key:**
+   - In your project, go to Project Settings > Service accounts
+   - Select "Firebase Admin SDK"
+   - Click "Generate new private key"
+   - Save the JSON file as `firebase-credentials.json` in your project root
+
+5. **Configure your .env file:**
+   ```
+   USE_FIREBASE_VECTORDB=true
+   FIREBASE_CREDENTIALS_PATH=./firebase-credentials.json
+   FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
+   FIREBASE_COLLECTION_NAME=vector_embeddings
+   FIREBASE_NAMESPACE=web_scraper
+   ```
+
+## Security Considerations
+
+When using Firebase:
+- Never commit your Firebase credentials to version control
+- Add `firebase-credentials.json` to your `.gitignore` file
+- Consider using environment variables for production deployment
+- Set up appropriate Firestore security rules to restrict access
 
 ## License
 
