@@ -34,6 +34,7 @@ A lightweight web scraping tool that extracts structured data and passes it to A
   - Semantic search across agent memory
   - Memory context augmentation for AI responses
   - Automatic memory from web scraping results
+  - Configurable memory parameters
 
 - **AI integration**:
   - Uses OpenAI to analyze web content
@@ -113,6 +114,9 @@ python -m scripts.test_memory
 
 # Test simple memory augmentation
 python -m scripts.test_memory --simple --url https://en.wikipedia.org/wiki/Large_language_model --question "What are the capabilities and limitations of LLMs?"
+
+# Test memory parameters
+python -m scripts.test_memory_params
 ```
 
 #### Use the API:
@@ -131,6 +135,15 @@ curl -X POST http://localhost:8000/api/memory/add -H "Content-Type: application/
 
 # Retrieve from agent memory
 curl -X POST http://localhost:8000/api/memory/retrieve -H "Content-Type: application/json" -d '{"agent_id":"your-agent-id", "query":"information"}'
+
+# Get memory parameters
+curl -X POST http://localhost:8000/api/memory/params -H "Content-Type: application/json" -d '{"agent_id":"your-agent-id"}'
+
+# Update memory parameters
+curl -X POST http://localhost:8000/api/memory/params/update -H "Content-Type: application/json" -d '{"agent_id":"your-agent-id", "params":{"max_items_per_query": 10}}'
+
+# Reset memory parameters to defaults
+curl -X POST http://localhost:8000/api/memory/params/reset -H "Content-Type: application/json" -d '{"agent_id":"your-agent-id"}'
 ```
 
 #### API Documentation:
@@ -158,6 +171,7 @@ Once the server is running, you can access the interactive API documentation at:
   - `test_analyze.py`: Test script for AI analysis
   - `test_firebase_vectors.py`: Test script for Firebase vector database
   - `test_memory.py`: Test script for agent memory functionality
+  - `test_memory_params.py`: Test script for memory parameters functionality
 - `data/`: (Created at runtime)
   - `cache/`: Stores scraped HTML and extracted text
   - `vector_cache/`: Stores vectorized document embeddings (local mode only)
@@ -208,6 +222,27 @@ The system supports two main types of memory items:
 - **Firebase Integration**: Scale across multiple instances with cloud storage
 - **Automatic Capture**: Automatically save relevant web content to memory
 - **Memory Context**: Enhance AI responses with relevant memory items
+- **Configurable Parameters**: Customize memory behavior per agent
+
+### Memory Parameters
+
+The memory system supports customizable parameters that can be set per agent:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `max_items_per_query` | Maximum number of memory items to retrieve per query | 5 |
+| `relevance_threshold` | Minimum similarity score (0-1) for memory to be considered relevant | 0.6 |
+| `max_context_items` | Maximum number of memory items to include in context | 3 |
+| `retention_period` | How long to retain memories in seconds | 2592000 (30 days) |
+| `priority_categories` | Categories that should be prioritized in retrieval | [] |
+| `auto_categorize` | Whether to attempt automatic categorization of new memories | true |
+| `context_strategy` | Strategy for context selection | "recency_weighted" |
+
+#### Context Strategies:
+
+- **relevance_only**: Return memories purely based on relevance score
+- **recency_weighted**: Combine relevance with recency (newer memories get a boost)
+- **priority_first**: Prioritize memories from priority categories, then by relevance
 
 ### Using Memory in Your Application
 
@@ -217,6 +252,10 @@ The system supports two main types of memory items:
    
    # Create a memory instance for a specific agent
    memory = AgentMemory(agent_id="your-agent-id")
+   
+   # Or with custom parameters
+   custom_params = {"max_items_per_query": 10, "context_strategy": "priority_first"}
+   memory = AgentMemory(agent_id="your-agent-id", memory_params=custom_params)
    ```
 
 2. **Adding Documents**:
@@ -252,12 +291,24 @@ The system supports two main types of memory items:
    memories = await memory.list_by_category(category="notes")
    ```
 
-5. **Deleting Memory**:
+5. **Managing Parameters**:
+   ```python
+   # Get current parameters
+   params = await memory.get_memory_params()
+   
+   # Update parameters
+   success = await memory.update_memory_params({
+       "max_context_items": 5,
+       "priority_categories": ["important", "critical"]
+   })
+   ```
+
+6. **Deleting Memory**:
    ```python
    success = await memory.delete_item(memory_id="doc-123")
    
    # Clear all memory
-   success = await memory.wipe_memory()
+   success = await memory.wipe_memory(keep_params=True)
    ```
 
 ## Storage and Caching System
@@ -365,6 +416,62 @@ To set up Firebase for vector database storage:
    FIREBASE_NAMESPACE=web_scraper
    ```
 
+6. **Configure Firestore rules:**
+   - In Firestore Database, go to the "Rules" tab
+   - Update the rules to restrict access as needed
+   - Example rules for development:
+     ```
+     rules_version = '2';
+     service cloud.firestore {
+       match /databases/{database}/documents {
+         match /{document=**} {
+           allow read, write: if true;
+         }
+       }
+     }
+     ```
+   - For production, set more restrictive rules based on your authentication model
+
+7. **Set up Firebase Storage rules:**
+   - In Storage, go to the "Rules" tab
+   - Update the rules to restrict access as needed
+   - Example rules for development:
+     ```
+     rules_version = '2';
+     service firebase.storage {
+       match /b/{bucket}/o {
+         match /{allPaths=**} {
+           allow read, write: if true;
+         }
+       }
+     }
+     ```
+
+## Token Usage Optimization
+
+The agent memory system is designed to minimize token usage while maximizing the usefulness of context:
+
+### Token Usage Strategies:
+
+1. **Selective Retrieval**: Only the most relevant memories are retrieved based on the query, drastically reducing token usage compared to including all agent knowledge.
+
+2. **Parameter Tuning**: You can adjust memory parameters based on your specific requirements:
+   - Lower `max_context_items` to reduce tokens used in each request
+   - Increase `relevance_threshold` to only include highly relevant memories
+   - Use `priority_categories` to focus on the most important information
+
+3. **Context Strategies**: Choose the most appropriate strategy for your use case:
+   - `relevance_only`: Most token-efficient but may miss recent important information
+   - `recency_weighted`: Balances relevance with recency for better context
+   - `priority_first`: Most controlled approach, prioritizing critical information
+
+4. **Memory Management**: 
+   - Remove outdated or irrelevant memories to keep the memory store efficient
+   - Categorize memories properly to enable better filtering
+   - Set appropriate retention periods to automatically expire old memories
+
+By fine-tuning these parameters, you can optimize the token usage based on your specific requirements and budget.
+
 ## Security Considerations
 
 When using Firebase:
@@ -372,6 +479,7 @@ When using Firebase:
 - Add `firebase-credentials.json` to your `.gitignore` file
 - Consider using environment variables for production deployment
 - Set up appropriate Firestore security rules to restrict access
+- Monitor your Firebase usage and set up quotas to prevent unexpected costs
 
 ## License
 
