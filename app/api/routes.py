@@ -73,6 +73,16 @@ class MemoryWipeRequest(BaseModel):
     """Request model for wiping agent memory."""
     agent_id: str
     confirm: bool = Field(False, description="Confirmation that memory should be wiped")
+    keep_params: bool = Field(True, description="Whether to keep agent memory parameters")
+
+class MemoryParamsRequest(BaseModel):
+    """Request model for updating memory parameters."""
+    agent_id: str
+    params: Dict[str, Any] = Field(..., description="Memory parameters to update")
+
+class MemoryParamsRetrieveRequest(BaseModel):
+    """Request model for retrieving memory parameters."""
+    agent_id: str
 
 # Dependency for OpenAI agent
 async def get_openai_agent(agent_id: Optional[str] = None):
@@ -366,6 +376,7 @@ async def wipe_memory(
     
     - **agent_id**: Agent ID
     - **confirm**: Confirmation that memory should be wiped (must be true)
+    - **keep_params**: Whether to preserve agent memory parameters
     """
     try:
         if not request.confirm:
@@ -373,23 +384,85 @@ async def wipe_memory(
         
         logger.info(f"Wiping memory for agent {openai_agent.agent_id}")
         
-        result = await openai_agent.wipe_memory()
+        # Access the memory instance directly to use the keep_params option
+        result = await openai_agent.memory.wipe_memory(keep_params=request.keep_params)
         
-        if not result.get("success", False):
-            error = result.get("error", "Unknown error")
-            raise HTTPException(status_code=400, detail=f"Failed to wipe memory: {error}")
+        if not result:
+            raise HTTPException(status_code=400, detail="Failed to wipe memory")
         
         # Return success
         return {
             "success": True,
             "agent_id": openai_agent.agent_id,
-            "message": result.get("message")
+            "message": f"Memory wiped successfully" + (" (parameters preserved)" if request.keep_params else "")
         }
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error wiping memory: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/params", summary="Get agent memory parameters")
+async def get_memory_params(
+    request: MemoryParamsRetrieveRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Get agent memory parameters.
+    
+    - **agent_id**: Agent ID
+    """
+    try:
+        logger.info(f"Getting memory parameters for agent {openai_agent.agent_id}")
+        
+        # Get parameters
+        params = await openai_agent.memory.get_memory_params()
+        
+        # Return parameters
+        return {
+            "success": True,
+            "agent_id": openai_agent.agent_id,
+            "params": params
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting memory parameters: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memory/params/update", summary="Update agent memory parameters")
+async def update_memory_params(
+    request: MemoryParamsRequest,
+    openai_agent: OpenAIAgent = Depends(lambda: get_openai_agent(request.agent_id))
+):
+    """
+    Update agent memory parameters.
+    
+    - **agent_id**: Agent ID
+    - **params**: Memory parameters to update
+    """
+    try:
+        logger.info(f"Updating memory parameters for agent {openai_agent.agent_id}")
+        
+        # Update parameters
+        success = await openai_agent.memory.update_memory_params(request.params)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to update memory parameters")
+        
+        # Get updated parameters
+        params = await openai_agent.memory.get_memory_params()
+        
+        # Return updated parameters
+        return {
+            "success": True,
+            "agent_id": openai_agent.agent_id,
+            "message": "Memory parameters updated successfully",
+            "params": params
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating memory parameters: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cache/clear", summary="Clear expired cache entries")
