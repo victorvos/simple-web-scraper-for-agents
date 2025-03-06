@@ -55,12 +55,30 @@ async def startup_event():
     
     # Ensure storage directories exist
     cache_dir = os.environ.get("CACHE_DIR", "./data/cache")
+    vector_cache_dir = os.environ.get("VECTOR_CACHE_DIR", "./data/vector_cache")
     os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(vector_cache_dir, exist_ok=True)
+    
+    # Check Firebase configuration if enabled
+    use_firebase = os.environ.get("USE_FIREBASE_VECTORDB", "false").lower() == "true"
+    if use_firebase:
+        firebase_creds_path = os.environ.get("FIREBASE_CREDENTIALS_PATH")
+        if not firebase_creds_path or not os.path.exists(firebase_creds_path):
+            logger.warning(
+                f"Firebase is enabled but credentials file not found at {firebase_creds_path}. "
+                "Vector database will fall back to local FAISS."
+            )
+            os.environ["USE_FIREBASE_VECTORDB"] = "false"
+        else:
+            logger.info(f"Using Firebase for vector database storage with credentials at {firebase_creds_path}")
     
     # Log configuration
     logger.info(f"Cache directory: {cache_dir}")
+    logger.info(f"Vector cache directory: {vector_cache_dir}")
     logger.info(f"Scrape delay: {os.environ.get('SCRAPE_DELAY', '2.0')}s")
     logger.info(f"Stealth mode: {os.environ.get('USE_STEALTH_MODE', 'true')}")
+    logger.info(f"Using vectorization: {os.environ.get('USE_VECTORIZATION', 'true')}")
+    logger.info(f"Using Firebase vector database: {os.environ.get('USE_FIREBASE_VECTORDB', 'false')}")
 
 # Shutdown event
 @app.on_event("shutdown")
