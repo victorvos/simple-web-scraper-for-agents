@@ -54,10 +54,15 @@ python -m playwright install
 3. Configure environment variables:
 ```bash
 cp .env.example .env
-# Edit .env with your OpenAI API key
+# Edit .env with your OpenAI API key and other settings
 ```
 
-4. Run the API server:
+4. Create necessary directories:
+```bash
+mkdir -p data/cache data/vector_cache
+```
+
+5. Run the API server:
 ```bash
 uvicorn app.main:app --reload
 ```
@@ -88,6 +93,11 @@ curl -X POST http://localhost:8000/api/analyze -H "Content-Type: application/jso
 curl -X POST http://localhost:8000/api/summarize -H "Content-Type: application/json" -d '{"url":"https://example.com", "max_length":300}'
 ```
 
+#### API Documentation:
+Once the server is running, you can access the interactive API documentation at:
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
 ## Project Structure
 
 - `app/`: Main application code
@@ -99,10 +109,14 @@ curl -X POST http://localhost:8000/api/summarize -H "Content-Type: application/j
     - `document_processor.py`: Content vectorization and optimization
   - `api/`: API routes and definitions
   - `storage/`: Local data storage logic
+    - `cache.py`: Caching system for scraped content
   - `main.py`: Application entry point
 - `scripts/`: Utility scripts
   - `test_scrape.py`: Test script for the scraper
   - `test_analyze.py`: Test script for AI analysis
+- `data/`: (Created at runtime)
+  - `cache/`: Stores scraped HTML and extracted text
+  - `vector_cache/`: Stores vectorized document embeddings
 - `requirements.txt`: Dependencies
 - `.env.example`: Environment variables template
 
@@ -120,6 +134,51 @@ Benefits include:
 - Improved response quality for large documents
 - Faster responses
 - Ability to handle much larger documents than would fit in context window
+
+## Storage and Caching System
+
+The application uses two types of caching to improve performance and reduce API costs:
+
+### Content Cache (`data/cache/`)
+- Stores raw HTML and extracted text from scraped websites
+- Uses file-based storage with MD5 hashing for cache keys
+- Configurable TTL (time-to-live) for cache entries
+- Prevents unnecessary repeat requests to the same URLs
+
+### Vector Cache (`data/vector_cache/`)
+- Stores FAISS vector indexes with document embeddings
+- Each webpage gets its own vector index for semantic search
+- Significantly speeds up repeat queries to the same website
+- Reduces OpenAI API costs for embedding generation
+
+You can configure cache settings in the `.env` file:
+```
+CACHE_DIR=./data/cache
+CACHE_EXPIRY=86400  # 24 hours in seconds
+VECTOR_CACHE_DIR=./data/vector_cache
+```
+
+## Configuration Options
+
+All configuration can be done through environment variables in the `.env` file:
+
+### OpenAI Settings
+- `OPENAI_API_KEY`: Your OpenAI API key
+
+### Scraping Settings
+- `SCRAPE_DELAY`: Time in seconds between actions (default: 2.0)
+- `USE_STEALTH_MODE`: Enable stealth techniques (default: true)
+- `MAX_PAGES`: Maximum pages to scrape in multi-page mode (default: 3)
+- `BROWSER_HEADLESS`: Run browser in headless mode (default: true)
+
+### Vectorization Settings
+- `USE_VECTORIZATION`: Enable vectorization by default (default: true)
+- `CHUNK_SIZE`: Size of document chunks for vectorization (default: 1000)
+- `CHUNK_OVERLAP`: Overlap between chunks (default: 200)
+
+### Server Settings
+- `HOST`: Server host (default: 0.0.0.0)
+- `PORT`: Server port (default: 8000)
 
 ## License
 
