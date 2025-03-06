@@ -27,17 +27,27 @@ A lightweight web scraping tool that extracts structured data and passes it to A
   - Shared vector embeddings database for distributed scraping
   - Automatic backup and redundancy
 
+- **Agent memory system**:
+  - Persistent memory for each agent using vector database
+  - Store documents and structured data objects
+  - Tag and categorize memory items
+  - Semantic search across agent memory
+  - Memory context augmentation for AI responses
+  - Automatic memory from web scraping results
+
 - **AI integration**:
   - Uses OpenAI to analyze web content
   - Can answer questions about scraped content
   - Summarization capabilities
   - Smart chunking and context handling
+  - Context-aware responses using agent memory
 
 - **API endpoints**:
   - `/api/scrape` - Extract content from a URL
   - `/api/analyze` - Analyze content with AI
   - `/api/summarize` - Generate summaries of web content
   - `/api/scrape-multiple` - Follow links and scrape multiple pages
+  - `/api/memory/*` - Endpoints for managing agent memory
 
 ## Quick Start
 
@@ -65,7 +75,7 @@ cp .env.example .env
 
 4. Create necessary directories:
 ```bash
-mkdir -p data/cache data/vector_cache
+mkdir -p data/cache data/vector_cache data/memory_cache
 ```
 
 5. Firebase Setup (Optional but Recommended):
@@ -97,6 +107,12 @@ python -m scripts.test_analyze https://en.wikipedia.org/wiki/Web_scraping "What 
 
 # Test AI analysis without vectorization (for comparison)
 python -m scripts.test_analyze https://en.wikipedia.org/wiki/Web_scraping "What are the ethical concerns with web scraping?" --no-vector
+
+# Test agent memory functionality
+python -m scripts.test_memory
+
+# Test simple memory augmentation
+python -m scripts.test_memory --simple --url https://en.wikipedia.org/wiki/Large_language_model --question "What are the capabilities and limitations of LLMs?"
 ```
 
 #### Use the API:
@@ -109,6 +125,12 @@ curl -X POST http://localhost:8000/api/analyze -H "Content-Type: application/jso
 
 # Generate a summary of a website
 curl -X POST http://localhost:8000/api/summarize -H "Content-Type: application/json" -d '{"url":"https://example.com", "max_length":300}'
+
+# Add to agent memory
+curl -X POST http://localhost:8000/api/memory/add -H "Content-Type: application/json" -d '{"content":"Important information to remember", "content_type":"document", "category":"notes"}'
+
+# Retrieve from agent memory
+curl -X POST http://localhost:8000/api/memory/retrieve -H "Content-Type: application/json" -d '{"agent_id":"your-agent-id", "query":"information"}'
 ```
 
 #### API Documentation:
@@ -125,6 +147,7 @@ Once the server is running, you can access the interactive API documentation at:
   - `agents/`: AI agent integration
     - `openai_agent.py`: OpenAI integration for analysis
     - `document_processor.py`: Content vectorization and optimization
+    - `memory.py`: Agent memory system using vector database
   - `api/`: API routes and definitions
   - `storage/`: Local data storage logic
     - `cache.py`: Caching system for scraped content
@@ -133,9 +156,12 @@ Once the server is running, you can access the interactive API documentation at:
 - `scripts/`: Utility scripts
   - `test_scrape.py`: Test script for the scraper
   - `test_analyze.py`: Test script for AI analysis
+  - `test_firebase_vectors.py`: Test script for Firebase vector database
+  - `test_memory.py`: Test script for agent memory functionality
 - `data/`: (Created at runtime)
   - `cache/`: Stores scraped HTML and extracted text
   - `vector_cache/`: Stores vectorized document embeddings (local mode only)
+  - `memory_cache/`: Stores agent memory (local mode only)
 - `requirements.txt`: Dependencies
 - `.env.example`: Environment variables template
 - `firebase-credentials.json`: Firebase credentials file (you must create this)
@@ -154,6 +180,85 @@ Benefits include:
 - Improved response quality for large documents
 - Faster responses
 - Ability to handle much larger documents than would fit in context window
+
+## Agent Memory System
+
+The agent memory system allows AI agents to maintain persistent knowledge across different conversations and sessions. It leverages the vector database for efficient storage and retrieval of information based on semantic similarity.
+
+### Memory Types
+
+The system supports two main types of memory items:
+
+1. **Documents**: Text-based memory items with metadata
+   - Scraped web content
+   - Notes and information
+   - Custom knowledge entries
+
+2. **Data Objects**: Structured JSON data with a text description
+   - Statistics and numeric data
+   - Structured information
+   - Configuration and preferences
+
+### Memory Features
+
+- **Persistent Storage**: Memory persists across application restarts
+- **Semantic Search**: Find relevant memories based on semantic meaning
+- **Categorization**: Organize memories by categories
+- **Metadata Filtering**: Filter and search by metadata values
+- **Firebase Integration**: Scale across multiple instances with cloud storage
+- **Automatic Capture**: Automatically save relevant web content to memory
+- **Memory Context**: Enhance AI responses with relevant memory items
+
+### Using Memory in Your Application
+
+1. **Initialization**:
+   ```python
+   from app.agents.memory import AgentMemory
+   
+   # Create a memory instance for a specific agent
+   memory = AgentMemory(agent_id="your-agent-id")
+   ```
+
+2. **Adding Documents**:
+   ```python
+   doc_id = await memory.add_document(
+       document="Important information to remember",
+       metadata={"source": "user input", "importance": "high"},
+       category="notes"
+   )
+   ```
+
+3. **Adding Data Objects**:
+   ```python
+   obj_id = await memory.add_data_object(
+       content={"key1": "value1", "key2": 42, "key3": [1, 2, 3]},
+       description="Configuration settings for the application",
+       category="config"
+   )
+   ```
+
+4. **Retrieving Memory**:
+   ```python
+   # By query (semantic search)
+   memories = await memory.retrieve_relevant(
+       query="What are the application settings?",
+       k=3
+   )
+   
+   # By ID
+   memory = await memory.get_by_id(memory_id="doc-123")
+   
+   # By category
+   memories = await memory.list_by_category(category="notes")
+   ```
+
+5. **Deleting Memory**:
+   ```python
+   success = await memory.delete_item(memory_id="doc-123")
+   
+   # Clear all memory
+   success = await memory.wipe_memory()
+   ```
 
 ## Storage and Caching System
 
@@ -212,6 +317,7 @@ All configuration can be done through environment variables in the `.env` file:
 - `CACHE_DIR`: Directory for content cache (default: ./data/cache)
 - `CACHE_EXPIRY`: TTL for cache entries in seconds (default: 86400 - 24h)
 - `VECTOR_CACHE_DIR`: Directory for vector embeddings (default: ./data/vector_cache)
+- `MEMORY_CACHE_DIR`: Directory for agent memory (default: ./data/memory_cache)
 
 ### Firebase Settings
 - `USE_FIREBASE_VECTORDB`: Use Firebase for vector storage (default: false)
