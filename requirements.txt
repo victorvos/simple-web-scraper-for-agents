@@ -21,6 +21,11 @@ faiss-cpu==1.7.4
 numpy==1.24.3
 sentence-transformers==2.2.2
 
+# Firebase integration
+firebase-admin==6.2.0
+google-cloud-firestore==2.11.1
+google-cloud-storage==2.10.0
+
 # Optional dependencies (uncomment if needed)
 # chromadb==0.4.18  # Alternative vector store
 # tiktoken==0.5.1   # For better token counting
